@@ -137,12 +137,12 @@ def main():
     )
 
     for i_sub in all_files:
-        if i_sub < 0 or i_sub >= len(all_files):
-            print(f"[warn] index {i_sub} out of bounds for {len(all_files)} files; skipping.")
-            continue
+        # if i_sub < 0 or i_sub >= len(all_files):
+        #     print(f"[warn] index {i_sub} out of bounds for {len(all_files)} files; skipping.")
+        #     continue
 
-        xdf_path = str(all_files[i_sub])
-        print(f"\n=== Subject index {i_sub+1} | file: {xdf_path} ===")
+        xdf_path = Path(i_sub)
+        # print(f"\n=== Subject index {i_sub+1} | file: {xdf_path} ===")
 
         # 1) load and inspect XDF
         streams, _ = pyxdf.load_xdf(xdf_path)
