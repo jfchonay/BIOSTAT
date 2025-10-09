@@ -74,7 +74,6 @@ def xdf_inspect(streams):
     """
     Return (streamNames, channelMetaData) similar to your MATLAB helper.
     - streamNames: list of names
-    - channelMetaData: list of dicts per stream with labels and count
     """
     names = []
     ch_meta = []
@@ -82,10 +81,7 @@ def xdf_inspect(streams):
         info = s.get("info", {})
         name = info.get("name", [""])[0] if isinstance(info.get("name", []), list) else info.get("name", "")
         names.append(name)
-        chn = info.get("desc", {}).get("channels", {}).get("channel", [])
-        labels = [c.get("label", ["ch"])[0] for c in chn] if isinstance(chn, list) else []
-        ch_meta.append({"n_chans": len(labels), "labels": labels})
-    return names, ch_meta
+    return names
 
 
 def stream_to_events(event_stream, ref_time_stamps):
@@ -137,16 +133,12 @@ def main():
     )
 
     for i_sub in all_files:
-        # if i_sub < 0 or i_sub >= len(all_files):
-        #     print(f"[warn] index {i_sub} out of bounds for {len(all_files)} files; skipping.")
-        #     continue
 
         xdf_path = Path(i_sub)
-        # print(f"\n=== Subject index {i_sub+1} | file: {xdf_path} ===")
 
         # 1) load and inspect XDF
         streams, _ = pyxdf.load_xdf(xdf_path)
-        stream_names, channel_meta = xdf_inspect(streams)
+        stream_names = xdf_inspect(streams)
 
         # find streams by name (order can vary)
         def find_stream(name):
