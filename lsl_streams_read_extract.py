@@ -1,16 +1,3 @@
-# hmd_synced_xdf_export.py
-# Usage:
-#   python hmd_synced_xdf_export.py --in "C:/path/to/xdf_dir" --out "./export"
-#
-# What it does:
-#   * Finds the "HMD" stream and uses its time stamps as the global reference.
-#   * Produces HMD-synced CSVs for numeric streams: columns are time (s since HMD start) + channels.
-#   * Produces event CSVs for marker-like streams (Markers, LookedAtObject/LookedAtObjects):
-#       columns: event_ts (original XDF ts), onset_hmd_s, hmd_sample, value
-#   * Sidecar JSON per stream with metadata, stats, and channel info.
-#   * A manifest.json summarizing the export and the reference timeline.
-
-import argparse
 import json
 import re
 from pathlib import Path
@@ -26,6 +13,27 @@ import pyxdf
 
 SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_\-]+")
 
+_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
+
+def _flatten_marker_values(time_series):
+    """Turn nested marker payloads like [['Start'], ['Stop']] into ['Start','Stop']."""
+    flat = []
+    for e in time_series:
+        if isinstance(e, (list, tuple)) and len(e) == 1:
+            flat.append(e[0])
+        else:
+            flat.append(e)
+    return flat
+
+def _ceil_indices(ref_ts: np.ndarray, evt_ts: np.ndarray) -> np.ndarray:
+    """
+    MATLAB's find(ref_ts >= t, 1, 'first') for each t:
+      -> np.searchsorted(ref_ts, t, side='left')
+    If t > ref_ts[-1], we clip to the last sample (MATLAB would return empty).
+    """
+    idx = np.searchsorted(ref_ts, evt_ts, side="left")
+    idx = np.clip(idx, 0, max(0, ref_ts.size - 1))
+    return idx.astype(int)
 
 def sanitize(s: str, fallback: str = "unnamed"):
     if s is None:
@@ -64,9 +72,7 @@ def is_event_stream(stream) -> bool:
         return True
     if "lookedatobject" in nm or "lookedatobject" in tp:
         return True
-    if "lookedatobjects" in nm or "lookedatobjects" in tp:
-        return True
-    # Heuristic: time_series is list of strings or list-of-1 strings
+    # time_series is list of strings or list-of-1 strings
     ts = stream.get("time_series", [])
     if isinstance(ts, list) and ts:
         s0 = ts[0]
@@ -76,10 +82,62 @@ def is_event_stream(stream) -> bool:
             return True
     return False
 
+def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
+    """
+    Python analogue of your MATLAB stream_to_events(), but aligning to HMD.
+    Accepts either a single stream dict or a list of stream dicts.
+    Returns a sorted list of event dicts with fields:
+      type, timestamp, sample, offset, duration, value
+    """
+    if not isinstance(in_streams, (list, tuple)):
+        in_streams = [in_streams]
+
+    out_events = []
+    for s in in_streams:
+        # original event times
+        evt_ts = np.asarray(s.get("time_stamps", []), dtype=float)
+        # ceil indices on HMD grid (first index with HMD_ts >= evt_ts)
+        if hmd_time_stamps is None or hmd_time_stamps.size == 0:
+            idx = np.zeros_like(evt_ts, dtype=int)
+        else:
+            idx = _ceil_indices(hmd_time_stamps, evt_ts)
+
+        # payload -> 'value'
+        vals = _flatten_marker_values(s.get("time_series", []))
+        # length safety
+        if len(vals) != evt_ts.size:
+            # trim/pad to match (rare; keeps behavior defined)
+            n = min(len(vals), evt_ts.size)
+            vals = vals[:n]
+            evt_ts = evt_ts[:n]
+            idx = idx[:n]
+
+        # sanitize like MATLAB: regexprep('[^a-zA-Z0-9]',' ')
+        vals_clean = [_ALNUM_RE.sub(" ", str(v)) for v in vals]
+
+        # event type from stream.info.type if present; default 'Marker'
+        stype = s.get("info", {}).get("type", [""])[0] if isinstance(s.get("info", {}).get("type", []), list) \
+                else s.get("info", {}).get("type", "") or "Marker"
+
+        # build event dicts
+        for t, i, v in zip(evt_ts, idx, vals_clean):
+            out_events.append({
+                "type": str(stype),
+                "timestamp": float(t),   # original XDF timestamp
+                "sample": int(i),        # HMD sample index (ceil)
+                "offset": 0,
+                "duration": 0,
+                "value": v
+            })
+
+    # sort by original timestamp (like MATLAB)
+    out_events.sort(key=lambda e: e["timestamp"])
+    return out_events
+
 
 def channel_meta_from_stream(stream) -> Tuple[List[str], List[Optional[str]]]:
     """
-    Return (names, units) lists for channels, robust to XDF/LSL nested list/dict shapes.
+    Return (names, units) lists for channels, from XDF nested list/dict shapes.
     Works when desc/channels/channel are dicts or lists-of-one dicts.
     """
     info = stream.get("info", {})
@@ -102,7 +160,7 @@ def channel_meta_from_stream(stream) -> Tuple[List[str], List[Optional[str]]]:
         for i, c in enumerate(ch):
             if not isinstance(c, dict):
                 continue
-            nm = first_scalar(c.get("name"), f"ch{i+1}")
+            nm = first_scalar(c.get("label"), f"ch{i+1}")
             un = first_scalar(c.get("unit"), None)
             names.append(sanitize(nm, f"ch{i+1}"))
             units.append(un)
@@ -118,7 +176,7 @@ def stream_stats(stream):
     ts = np.asarray(stream.get("time_stamps", []), dtype=float)
     info = stream.get("info", {})
     try:
-        nominal = float(info.get("nominal_srate", 0.0))
+        nominal = float(info.get("nominal_srate", 0.0)[0])
     except Exception:
         nominal = 0.0
     eff = None
@@ -187,6 +245,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
     # manifest skeleton
     manifest = {
         "source_file": str(xdf_path),
+        "id": xdf_path.stem,
         "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "file_header": fileheader,
         "reference": {
@@ -206,8 +265,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
     for k, stream in enumerate(streams):
         name = stream_name(stream)
         stype = stream_type(stream)
-        base = f"{k:02d}-{sanitize(name, f'stream{k}')}"
-        is_event = is_event_stream(stream)
+        base = f"{sanitize(stype, f'stream{k}')}"
 
         # original stream time stamps & first
         ts = np.asarray(stream.get("time_stamps", []), dtype=float)
@@ -223,37 +281,22 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             acquisition_times[name] = None
 
         # ---- EVENT STREAMS (Markers / LookedAtObjects): build onsets vs HMD ----
-        if is_event:
-            # flatten values
-            vals = []
-            for e in stream.get("time_series", []):
-                if isinstance(e, (list, tuple)) and len(e) == 1:
-                    vals.append(e[0])
-                else:
-                    vals.append(e)
-
-            # sanitize values to keep alnum + spaces (similar to MATLAB regexprep)
-            pattern = re.compile(r"[^a-zA-Z0-9]")
-            vals_clean = [pattern.sub(" ", str(v)) for v in vals]
-
-            # map event timestamps to nearest HMD sample index
-            idx, valid = nearest_indices_with_mask(ref_ts, ts)
-            onset_hmd_s = np.full(ts.shape, np.nan, dtype=float)
-            hmd_sample = np.full(ts.shape, -1, dtype=int)
-            if hmd_time.size and ts.size:
-                onset_hmd_s[valid] = hmd_time[idx[valid]]
-                hmd_sample[valid] = idx[valid]
+        if is_event_stream(stream):  # your existing predicate
+            event_struct = stream_to_events_hmd(stream, ref_ts)  # ref_ts is HMD timestamps
+            # onset_hmd_s = hmd_time[sample]
+            samples = np.array([e["sample"] for e in event_struct], dtype=int)
+            # guard against empty
+            onset_hmd_s = (hmd_time[samples] if samples.size else np.array([], dtype=float))
 
             df = pd.DataFrame({
-                "event_ts": ts,            # original event timestamp in XDF clock
-                "onset_hmd_s": onset_hmd_s,  # seconds since HMD start (what you’ll use)
-                "hmd_sample": hmd_sample,    # sample index on HMD grid
-                "value": pd.Series(vals_clean, dtype="string"),
+                "onset": onset_hmd_s,  # seconds since HMD start
+                "sample": samples,  # HMD sample index
+                "type": [e["type"] for e in event_struct],
+                "value": [e["value"] for e in event_struct],
+                "offset": [e["offset"] for e in event_struct],
+                "duration": [e["duration"] for e in event_struct],
             })
-
-            csv_path = out_dir / f"{base}-events.csv"
-            json_path = out_dir / f"{base}-events.json"
-            df.to_csv(csv_path, index=False)
+            df.to_csv(out_dir / f"{base}-events.csv", index=False)
 
             # sidecar
             sidecar = {
@@ -266,18 +309,19 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                     "timeline": "HMD",
                     "note": "onset_hmd_s and hmd_sample are aligned to HMD start at t=0s",
                 },
-                "columns": ["event_ts", "onset_hmd_s", "hmd_sample", "value"]
+                "columns": ["onset", "sample", "value"]
             }
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(sidecar, f, ensure_ascii=False, indent=2)
+            # Optionally also save the MATLAB-like struct as JSON:
+            with open(out_dir / f"{base}-events.json", "w", encoding="utf-8") as f:
+                json.dump(event_struct, f, ensure_ascii=False, indent=2)
 
             manifest["streams"].append({
                 "index": k,
                 "name": name,
                 "type": stype,
                 "role": "events",
-                "csv": str(csv_path),
-                "json": str(json_path),
+                "csv": str(out_dir / f"{base}-events.csv"),
+                "json": str(out_dir / f"{base}-events.json"),
                 "n_rows": int(len(df)),
                 "columns": list(df.columns),
             })
@@ -309,8 +353,8 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         df = pd.DataFrame(out, columns=headers)
         df.insert(0, "time", hmd_time)  # 0..HMD_duration (seconds)
 
-        csv_path = out_dir / f"{base}-hmdsynced.csv"
-        json_path = out_dir / f"{base}-hmdsynced.json"
+        csv_path = out_dir / f"{base}.csv"
+        json_path = out_dir / f"{base}.json"
         df.to_csv(csv_path, index=False)
 
         # sidecar
