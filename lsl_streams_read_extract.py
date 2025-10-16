@@ -280,6 +280,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
     manifest = {
         "source_file": str(xdf_path),
         "id": xdf_path.stem,
+        "greenery": xdf_path.stem[5],
         "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "file_header": fileheader,
         "reference": {
@@ -333,7 +334,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             df.to_csv(out_dir / f"{base}-events.csv", index=False)
 
             # sidecar
-            sidecar = {
+            sidecar_events = {
                 "name": name,
                 "type": stype,
                 "kind": "events",
@@ -343,11 +344,11 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                     "timeline": "HMD",
                     "note": "onset_hmd_s and hmd_sample are aligned to HMD start at t=0s",
                 },
-                "columns": ["onset", "sample", "value"]
+                "columns": ["onset", "sample", "value", "offset", "duration"]
             }
             # Optionally also save the MATLAB-like struct as JSON:
             with open(out_dir / f"{base}-events.json", "w", encoding="utf-8") as f:
-                json.dump(event_struct, f, ensure_ascii=False, indent=2)
+                json.dump(sidecar_events, f, ensure_ascii=False, indent=2)
 
             manifest["streams"].append({
                 "index": k,
@@ -380,7 +381,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         headers = [f"{n} ({u})" if u else n for n, u in zip(names, units)]
 
         df = pd.DataFrame(y, columns=headers)
-        df.insert(0, "time", t_rel)  # seconds since HMD start
+        # df.insert(0, "time", t_rel)  # seconds since HMD start but not necessary
         df.to_csv(out_dir / f"{base}.csv", index=False)
         json_path = out_dir / f"{base}.json"
 
@@ -394,10 +395,9 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             "reference": {
                 "aligned_to": ref_name,
                 "timeline": "HMD",
-                "time_column": "time",  # seconds since HMD start
                 "coverage_note": "Samples outside the stream’s original coverage are NaN after alignment.",
             },
-            "columns": ["time"] + headers
+            "columns": headers
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(sidecar, f, ensure_ascii=False, indent=2)
@@ -427,10 +427,10 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
 def main():
     if __name__ == "__main__":
-        in_dir = Path(r"/Users/josechonay/Documents/BIOSTAT_data")
-        out_dir = Path(r"/Users/josechonay/Documents/BIOSTAT_derivatives")
+        in_dir = Path(r"P:\BIOSTAT\lsl_full")
+        out_dir = Path(r"P:\BIOSTAT\raw_data")
         for xdf_file in in_dir.glob("*.xdf"):
-            sub = out_dir / sanitize(xdf_file.stem)
+            sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:3]}"
             print(f"Exporting {xdf_file} -> {sub}")
             export_xdf_hmd_synced(xdf_file, sub)
         print("Done.")
