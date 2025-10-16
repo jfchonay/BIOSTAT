@@ -16,7 +16,7 @@ SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_\-]+")
 _ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
 
 def _flatten_marker_values(time_series):
-    """Turn nested marker payloads like [['Start'], ['Stop']] into ['Start','Stop']."""
+    """Turn nested marker like [['Start'], ['Stop']] into ['Start','Stop']."""
     flat = []
     for e in time_series:
         if isinstance(e, (list, tuple)) and len(e) == 1:
@@ -118,7 +118,6 @@ def is_event_stream(stream) -> bool:
 
 def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
     """
-    Python analogue of your MATLAB stream_to_events(), but aligning to HMD.
     Accepts either a single stream dict or a list of stream dicts.
     Returns a sorted list of event dicts with fields:
       type, timestamp, sample, offset, duration, value
@@ -136,7 +135,7 @@ def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
         else:
             idx = _ceil_indices(hmd_time_stamps, evt_ts)
 
-        # payload -> 'value'
+        #'value'
         vals = _flatten_marker_values(s.get("time_series", []))
         # length safety
         if len(vals) != evt_ts.size:
@@ -146,7 +145,7 @@ def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
             evt_ts = evt_ts[:n]
             idx = idx[:n]
 
-        # sanitize like MATLAB: regexprep('[^a-zA-Z0-9]',' ')
+        # sanitize
         vals_clean = [_ALNUM_RE.sub(" ", str(v)) for v in vals]
 
         # event type from stream.info.type if present; default 'Marker'
@@ -164,7 +163,7 @@ def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
                 "value": v
             })
 
-    # sort by original timestamp (like MATLAB)
+    # sort by original timestamp
     out_events.sort(key=lambda e: e["timestamp"])
     return out_events
 
@@ -316,7 +315,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             acquisition_times[name] = None
 
         # ---- EVENT STREAMS (Markers / LookedAtObjects): build onsets vs HMD ----
-        if is_event_stream(stream):  # your existing predicate
+        if is_event_stream(stream):
             event_struct = stream_to_events_hmd(stream, ref_ts)  # ref_ts is HMD timestamps
             # onset_hmd_s = hmd_time[sample]
             samples = np.array([e["sample"] for e in event_struct], dtype=int)
@@ -381,7 +380,6 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         headers = [f"{n} ({u})" if u else n for n, u in zip(names, units)]
 
         df = pd.DataFrame(y, columns=headers)
-        # df.insert(0, "time", t_rel)  # seconds since HMD start but not necessary
         df.to_csv(out_dir / f"{base}.csv", index=False)
         json_path = out_dir / f"{base}.json"
 
