@@ -407,7 +407,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             "name": name,
             "type": stype,
             "role": "signal",
-            "csv": str(csv_path),
+            "csv": str(out_dir / f"{base}.csv"),
             "json": str(json_path),
             "n_rows": int(len(df)),
             "columns": list(df.columns),
