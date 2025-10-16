@@ -25,6 +25,40 @@ def _flatten_marker_values(time_series):
             flat.append(e)
     return flat
 
+def trim_to_hmd_window(stream_ts: np.ndarray,
+                       stream_data: np.ndarray,
+                       hmd_ts: np.ndarray,
+                       clip_end: bool = True):
+    """
+    Trim a stream's native samples to the HMD window without resampling.
+
+    stream_ts : (N,) native timestamps of the stream (float seconds)
+    stream_data : (N,C) numeric data aligned to stream_ts
+    hmd_ts : (M,) HMD timestamps (reference clock)
+    clip_end : if True, drop samples after HMD end; if False, keep them
+
+    Returns:
+        t_rel : (K,) time in seconds since HMD start (0 at HMD first sample)
+        y     : (K,C) trimmed data (no NaN padding)
+        mask  : (N,) bool mask of kept samples in original stream
+    """
+    if hmd_ts.size == 0 or stream_ts.size == 0:
+        return np.empty((0,), float), stream_data[:0], np.zeros(stream_ts.size, bool)
+
+    start = hmd_ts[0]
+    end   = hmd_ts[-1]
+    if clip_end:
+        keep = (stream_ts >= start) & (stream_ts <= end)
+    else:
+        keep = (stream_ts >= start)
+
+    if stream_data.ndim == 1:
+        stream_data = stream_data.reshape(-1, 1)
+
+    t_rel = stream_ts[keep] - start
+    y     = stream_data[keep, :]
+    return t_rel, y, keep
+
 def _ceil_indices(ref_ts: np.ndarray, evt_ts: np.ndarray) -> np.ndarray:
     """
     MATLAB's find(ref_ts >= t, 1, 'first') for each t:
@@ -327,35 +361,28 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             })
             continue  # done with events
 
-        # ---- NUMERIC STREAMS: resample/alignment to HMD timeline ----
-        data = stream.get("time_series", [])
-        arr = np.asarray(data)
+        data = np.asarray(stream.get("time_series", []))
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        elif data.shape[0] < data.shape[1]:
+            data = data.T  # (n_samples, n_channels)
 
-        # Normalize to (n_samples, n_channels)
-        if arr.ndim == 1:  # (n_samples,)
-            arr = arr.reshape(-1, 1)
-        elif arr.shape[0] < arr.shape[1]:
-            arr = arr.T
+        ts = np.asarray(stream.get("time_stamps", []), dtype=float)
 
-        # channel names + units
+        # Trim to HMD window; remove leading "empty" region automatically
+        t_rel, y, keep = trim_to_hmd_window(ts, data, ref_ts, clip_end=True)
+
+        # Build DataFrame with ONLY valid rows, time starts at 0 (HMD start)
         names, units = channel_meta_from_stream(stream)
-        if len(names) != arr.shape[1]:
-            names = [f"ch{i+1}" for i in range(arr.shape[1])]
-            units = [None] * arr.shape[1]
+        if len(names) != y.shape[1]:
+            names = [f"ch{i + 1}" for i in range(y.shape[1])]
+            units = [None] * y.shape[1]
         headers = [f"{n} ({u})" if u else n for n, u in zip(names, units)]
 
-        # For each ref time, take nearest sample from this stream (inside coverage), else NaN
-        idx, valid = nearest_indices_with_mask(ts, ref_ts)
-        out = np.full((ref_ts.size, arr.shape[1]), np.nan, dtype=float)
-        if ts.size and ref_ts.size and arr.shape[0] > 0:
-            out[valid, :] = arr[idx[valid], :]
-
-        df = pd.DataFrame(out, columns=headers)
-        df.insert(0, "time", hmd_time)  # 0..HMD_duration (seconds)
-
-        csv_path = out_dir / f"{base}.csv"
+        df = pd.DataFrame(y, columns=headers)
+        df.insert(0, "time", t_rel)  # seconds since HMD start
+        df.to_csv(out_dir / f"{base}.csv", index=False)
         json_path = out_dir / f"{base}.json"
-        df.to_csv(csv_path, index=False)
 
         # sidecar
         sidecar = {
