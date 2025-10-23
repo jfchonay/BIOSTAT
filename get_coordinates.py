@@ -3,7 +3,7 @@ import pandas as pd
 import json
 
 # Base folder
-DATA_DIR = Path(r"/Users/josechonay/Documents/BIOSTAT_data")
+DATA_DIR = Path(r"P:\BIOSTAT\raw_data")
 
 # Target file names (without extensions)
 targets = ["Markers-events", "rigidBody"]
@@ -54,7 +54,7 @@ for subj_dir in DATA_DIR.iterdir():
         start_coord = coords_xyz.loc[start_sample]
         end_coord = coords_xyz.loc[stop_sample]
 
-        coord_list.append([subj_dir.name, start_coord.values[0], end_coord.values[0]])
+        coord_list.append([subj_dir.name, start_coord.values, end_coord.values])
 # Deleting any elements that show up empty
 cleaned = [
     item for item in coord_list
@@ -67,10 +67,9 @@ cleaned = [
 
 rows = []
 for name, arr1, arr2 in cleaned:
-    rows.append([name, *arr1, *arr2])
+    rows.append([name, *arr1[0], *arr2[0]])
 
 coord_df = pd.DataFrame(rows, columns=['sub-ID', 'x_start', 'z_start', 'x_end', 'z_end'])
 
 out_dir = r'P:\BIOSTAT\nudging\coordinates'
 coord_df.to_csv(out_dir + r"\start_end_coordinates.csv", index=False)
-
