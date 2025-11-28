@@ -3,7 +3,7 @@ import pandas as pd
 import json
 
 # Base folder
-DATA_DIR = Path(r"P:\BIOSTAT\raw_data")
+DATA_DIR = Path(r"P:\BIOSTAT\data_chunks")
 
 # Target file names (without extensions)
 targets = ["Markers-events", "rigidBody"]
@@ -67,9 +67,9 @@ cleaned = [
 
 rows = []
 for name, arr1, arr2 in cleaned:
-    rows.append([name, *arr1[0], *arr2[0]])
+    rows.append([name[0:7], *arr1[0], *arr2[0]])
 
 coord_df = pd.DataFrame(rows, columns=['sub-ID', 'x_start', 'z_start', 'x_end', 'z_end'])
 
 out_dir = r'P:\BIOSTAT\nudging\coordinates'
-coord_df.to_csv(out_dir + r"\start_end_coordinates.csv", index=False)
+coord_df.to_csv(out_dir + r"\start_end_coordinates_chunks.csv", index=False)

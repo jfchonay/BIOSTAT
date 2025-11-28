@@ -14,12 +14,12 @@ import numpy as np
 import sys
 
 # ----------------------- Config -----------------------
-m_dir = Path(r"/Users/josechonay/Documents/BIOSTAT_data")
-out_dir = Path(r"/Users/josechonay/Documents/BIOSTAT_derivatives")
-s_event = "Station scene  starting stress phase"
+m_dir = Path(r"P:\BIOSTAT\raw_data")
+out_dir = Path(r"P:\BIOSTAT\nudging\hmd_epoched")
+s_event = "Station scene  starting free choice phase"
+e_event = "Station scene  user told operator why they chose this spot  showing waypoint to assessment point"
 pre_seconds = 1.0          # seconds before onset
-duration = 20.0            # seconds after onset
-cols_to_keep_by_index = [4, 5, 6]   # 0-based column indices to export (equivalent to MATLAB 5:7)
+cols_to_keep = ['rigid_x', 'rigid_y', 'rigid_z']   # 0-based column indices to export (equivalent to MATLAB 5:7)
 # ------------------------------------------------------
 
 
@@ -27,12 +27,11 @@ def find_subject_pairs(base_dir: Path, data_name, event_name):
     """
     Heuristic: For each subject subfolder, find all possible .
     """
-    pairs = []
     data = []
     events = []
     for entry in base_dir.iterdir():
         if entry.is_dir():
-            # Try to find an events CSV and an HMD JSON inside this subject folder
+            # Try to find an events CSV and an JSON inside this subject folder
             all_csv = sorted(entry.glob("*.csv"))
             all_json = sorted(entry.glob("*.json"))
             if not all_csv or not all_json:
@@ -49,8 +48,7 @@ def find_subject_pairs(base_dir: Path, data_name, event_name):
                     events.append(file_json)
         else:
             pass
-    pairs.append(data, events)
-    return pairs
+    return data, events
 
 
 def load_events_csv(path: Path) -> pd.DataFrame:
@@ -152,12 +150,12 @@ def slice_window(df_hmd: pd.DataFrame, onset_sec: float, pre: float, post: float
 
 def main():
     out_dir.mkdir(parents=True, exist_ok=True)
-    pairs = find_subject_pairs(m_dir, "rigidBody", "Markers-events")
-    if not pairs:
+    data, events = find_subject_pairs(m_dir, "rigidBody", "Markers-events")
+    if not data and events:
         print(f"No subject folders with CSV+JSON found in {m_dir}", file=sys.stderr)
         return
 
-    for idx, (subject, events_csv, hmd_json, subj_folder) in enumerate(pairs, start=1):
+    for idx, (subject, events_csv, events_json, subj_folder) in enumerate(events):
         try:
             events = load_events_csv(events_csv)
         except Exception as e:

@@ -279,7 +279,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
     manifest = {
         "source_file": str(xdf_path),
         "id": xdf_path.stem,
-        "greenery": xdf_path.stem[5],
+        "greenery": xdf_path.stem[6],
         "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "file_header": fileheader,
         "reference": {
@@ -425,10 +425,10 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
 def main():
     if __name__ == "__main__":
-        in_dir = Path(r"P:\BIOSTAT\lsl_full")
-        out_dir = Path(r"P:\BIOSTAT\raw_data")
+        in_dir = Path(r"P:\BIOSTAT\lsl_chunks")
+        out_dir = Path(r"P:\BIOSTAT\data_chunks")
         for xdf_file in in_dir.glob("*.xdf"):
-            sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:3]}"
+            sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:4]}"
             print(f"Exporting {xdf_file} -> {sub}")
             export_xdf_hmd_synced(xdf_file, sub)
         print("Done.")
