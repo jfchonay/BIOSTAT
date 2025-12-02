@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 
 # Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path("/Users/josechonay/Documents/relevant_subjects")
-OUT_DIR = Path("/Users/josechonay/Documents/resampled")
+ROOT_DIR = Path(r"P:\BIOSTAT\raw_data")
+OUT_DIR = Path(r"P:\BIOSTAT\resampled")
 
 # Desired sampling rate for both events + GSR
 TARGET_FS = 100.0  # Hz
@@ -53,18 +53,13 @@ for subject_dir in ROOT_DIR.iterdir():
     if not manifest_path.exists():
         print(f"[WARN] No manifest.json in {subject_dir}, skipping.")
         continue
-    # ---- Read manifest and greenery flag ----
+    # Read manifest and greenery flag
     with open(manifest_path, "r") as f:
         manifest = json.load(f)
-    # -----------------------------------
     # Create output folder
-    # -----------------------------------
     output_dir = OUT_DIR / f"{subject_dir.name}"
     output_dir.mkdir(exist_ok=True)
-
-    # -----------------------------------
     # Copy manifest, add new sampling rate
-    # -----------------------------------
     manifest_copy = manifest.copy()
     manifest_copy["resampled_fs"] = TARGET_FS
 
@@ -91,7 +86,7 @@ for subject_dir in ROOT_DIR.iterdir():
     else:
         print(f"  [WARN] No {EVENTS_FILENAME} in {subject_dir}, skipping events.")
 
-    # ---- Resample GSR ----
+    # Resample GSR
     gsr_json_path = subject_dir / GSR_JSON_FILENAME
     gsr_csv_path = subject_dir / GSR_CSV_FILENAME
 

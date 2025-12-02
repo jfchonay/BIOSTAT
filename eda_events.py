@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path("/Users/josechonay/Documents/resampled")
+ROOT_DIR = Path(r"P:\BIOSTAT\resampled")
 OUT_DIR = Path("/Users/josechonay/Documents/stress_physio")
 
 # Filenames inside each subject folder (change if yours differ)
