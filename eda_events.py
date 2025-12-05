@@ -2,11 +2,12 @@ import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from scipy import stats
 import matplotlib.pyplot as plt
 
 # Root folder that contains one subfolder per subject and Output folder
 ROOT_DIR = Path(r"P:\BIOSTAT\resampled")
-OUT_DIR = Path(r"P:\BIOSTAT\stress_section")
+OUT_DIR = Path(r"P:\BIOSTAT\stress_section\gsr_raw_markers")
 
 # Filenames inside each subject folder (change if yours differ)
 MANIFEST_FILENAME = "manifest.json"
@@ -14,7 +15,7 @@ EVENTS_FILENAME = "Markers-events.csv"
 GSR_FILENAME = "GSR.csv"
 
 # Events names
-FIRST_EVENT = "Playing voice over  TutorialStartBaseline"
+FIRST_EVENT = "Tutorial  starting baseline"
 LAST_EVENT = "Station scene  end recovery phase  showing waypoint to debrief recovery"
 
 # Parameters of the epoch
@@ -40,16 +41,33 @@ for subject_dir in ROOT_DIR.iterdir():
     gsr_csv_path = subject_dir / GSR_FILENAME
     gsr_df = pd.read_csv(gsr_csv_path)
     # Check if the events exist in the file
-    if not any(events_df.index[events_df["value"] == FIRST_EVENT]) and any(events_df.index[events_df["value"] == LAST_EVENT]) :
-        print (f"[WARN] No events in {subject_dir}, skipping.")
+    if not ((events_df["value"] == FIRST_EVENT).any() and
+            (events_df["value"] == LAST_EVENT).any()):
+        print(f"[WARN] Missing events in {subject_dir}, skipping.")
         continue
     # Using the name of the events get the sample in which every event is found
     first_idx = events_df["sample"][events_df.index[events_df["value"] == FIRST_EVENT][0]]
     last_idx = events_df["sample"][events_df.index[events_df["value"] == LAST_EVENT][0]]
-    # Use the sample to cut the section of data from the GSR
-    gsr_event = np.array(gsr_df["CH1"][first_idx-s_b:last_idx+s_a])
-    # Invert the data and get the mean
-    gsr = [-g for g in gsr_event]
+    start_sample = max(0, first_idx - s_b)
+    end_sample   = min(last_idx + s_a, len(gsr_df) - 1)  # inclusive index
+    # Extract GSR segment
+    gsr_event = gsr_df["CH1"].iloc[start_sample:end_sample + 1].to_numpy()
+    # Invert and z-score normalize
+    gsr = stats.zscore(-gsr_event)
+    # time vector
+    n_samples = len(gsr)
+    time_sec = np.arange(n_samples) / 100  # seconds
+    if time_sec.size == 0:
+        print(f"[WARN] No valid time points for {subject_dir}, skipping.")
+        continue
+    # Events to use
+    between_mask = (events_df["sample"] >= first_idx) & (events_df["sample"] <= last_idx)
+    events_between = events_df.loc[between_mask].copy()
+    # Convert event sample positions to seconds (same reference as time_sec)
+    events_between["time_sec"] = (events_between["sample"] - start_sample) / 100
+    events_between = events_between.reset_index(drop=True)
+    events_between["label"] = (events_between.index + 1).astype(str)
+    # segment is from seg_start -> seg_end, so shift by seg_start, then / fs
     # save accordingly to the group they belong
     manifest_path = subject_dir / MANIFEST_FILENAME
     if not manifest_path.exists():
@@ -59,35 +77,59 @@ for subject_dir in ROOT_DIR.iterdir():
     with open(manifest_path, "r") as f:
         manifest = json.load(f)
     # According to group save in desired list
-    greenery = manifest.get("greenery")
-    if greenery == "1":
-        greenery_true.append(gsr)
-    elif greenery == "0":
-        greenery_false.append(gsr)
+    sub_id = manifest.get("id")
+    # -------- Plot GSR + event markers --------
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=200)  # higher dpi
 
-# Convert lists to numpy arrays for easy statistics
-green = np.array(greenery_true)   # shape = (n, 3)
-neutral = np.array(greenery_false)   # shape = (n, 3)
+    # Plot normalized GSR
+    ax.plot(time_sec, gsr, linewidth=0.25)
 
-# Compute means and standard deviations along rows
-mean_g = green.mean(axis=0)  # shape (3,)
-std_g  = green.std(axis=0)
+    # Grid + shared color for grid and event lines
+    grid_color = "0.7"  # light gray
+    ax.grid(True, which="both", linestyle="--", alpha=0.9, color=grid_color)
 
-mean_n = neutral.mean(axis=0)
-std_n  = neutral.std(axis=0)
+    # X ticks every 10 seconds
+    ax.set_xticks(np.arange(0, time_sec[-1] + 30, 30))
 
-# X positions (one per float position)
-x = np.arange(3)
-# Plot
-plt.figure()
-# Plot Green
-plt.errorbar(x, mean_g, fmt='-o', label="P1")
-# Plot Neutral
-plt.errorbar(x, mean_n, fmt='-o', label="P0")
-# Formatting
-plt.xticks(x, ["Baseline", "Stress", "Recovery"])
-plt.xlabel("Event")
-plt.ylabel("Average GSR")
-plt.title("Mean ± SD for GSR in every event")
-plt.legend()
-plt.show()
+    # Y ticks every 0.5 (based on current limits)
+    ymin, ymax = ax.get_ylim()
+    ytick_start = np.floor(ymin * 2) / 2.0
+    ytick_end = np.ceil(ymax * 2) / 2.0
+    ax.set_yticks(np.arange(ytick_start, ytick_end + 0.5, 0.5))
+    ax.tick_params(axis="x", labelsize=6)
+
+    # Event lines + labels on the time axis
+    for _, row in events_between.iterrows():
+        t_ev = row["time_sec"]
+
+        # vertical dashed line in same color as grid
+        ax.axvline(t_ev, linestyle="--", linewidth=0.3, color=grid_color)
+
+        # label on the time axis (bottom)
+        ax.text(
+            t_ev,
+            -0.1,  # slightly below axis
+            row["label"],  # "1", "2", ...
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=6,
+            rotation=45,
+            clip_on=False,
+        )
+    # Labels, title, grid
+    ax.set_title(f"Subject {sub_id}")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("GSR (z-scored)")
+    ax.grid(True, which="both", linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+
+    # optionally save instead of showing, or both
+    # out_path = subject_dir / f"{subject_id}_gsr_segment.png"
+    # plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    # plt.show()
+    out_path = OUT_DIR / f"{sub_id}.png"
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"[INFO] Saved plot to {out_path}")
