@@ -4,21 +4,6 @@ from scipy.signal import resample
 import numpy as np
 import pandas as pd
 
-# Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path(r"P:\BIOSTAT\data_chunks")
-OUT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
-
-# Desired sampling rate for all files
-TARGET_FS = 100.0  # Hz
-
-# Filenames inside each subject folder
-MANIFEST_FILENAME = "manifest.json"
-EVENTS_FILENAME = "Markers-events.csv"
-BODY_FILENAME = "rigidBody.json"
-GSR_JSON_FILENAME = "GSR.json"
-GSR_CSV_FILENAME = "GSR.csv"
-
-
 
 def resample_timeseries(df: pd.DataFrame, orig_fs: float, target_fs: float) -> pd.DataFrame:
     """
@@ -79,6 +64,18 @@ def resample_events(
     return out
 
 if __name__ == "__main__":
+    # Root folder that contains one subfolder per subject and Output folder
+    ROOT_DIR = Path(r"P:\BIOSTAT\data_chunks")
+    OUT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
+    # Desired sampling rate for all files
+    TARGET_FS = 100.0  # Hz
+    # Filenames inside each subject folder
+    MANIFEST_FILENAME = "manifest.json"
+    EVENTS_FILENAME = "Markers-events.csv"
+    BODY_FILENAME = "rigidBody.json"
+    GSR_JSON_FILENAME = "GSR.json"
+    GSR_CSV_FILENAME = "GSR.csv"
+
     for subject_dir in ROOT_DIR.iterdir():
         if not subject_dir.is_dir():
             continue
