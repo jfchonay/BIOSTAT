@@ -1,0 +1,30 @@
+{
+  "name": "PolarBand",
+  "type": "ECG",
+  "kind": "signal_hmd_synced",
+  "channels": [
+    {
+      "name": "ch1",
+      "unit": "microvolts"
+    }
+  ],
+  "stats_original": {
+    "n_samples": 46136,
+    "first_time_stamp": 28500.862620784377,
+    "last_time_stamp": 28863.056613285527,
+    "duration_sec": 362.1939925011502,
+    "nominal_srate": 130.0,
+    "estimated_srate": 139.914761049089
+  },
+  "reference": {
+    "aligned_to": "HMD",
+    "timeline": "HMD",
+    "time_column": "time",
+    "time_unit": "seconds_since_HMD_start",
+    "coverage_note": "Samples outside the stream’s original coverage are not present in the CSV."
+  },
+  "columns": [
+    "time",
+    "ch1 (microvolts)"
+  ]
+}
