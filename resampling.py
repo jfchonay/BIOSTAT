@@ -46,7 +46,6 @@ def resample_events(
     """
     if events_df.empty:
         return events_df.copy()
-
     if orig_fs <= 0 or target_fs <= 0:
         raise ValueError("orig_fs and target_fs must be positive.")
     # Scale factor between sample indices

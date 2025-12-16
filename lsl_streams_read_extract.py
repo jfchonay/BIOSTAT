@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Tuple, List, Optional
-
 import numpy as np
 import pandas as pd
 import pyxdf
@@ -423,16 +422,11 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
 # -------------------------- CLI --------------------------
 
-def main():
-    if __name__ == "__main__":
-        in_dir = Path(r"P:\BIOSTAT\lsl_chunks")
-        out_dir = Path(r"P:\BIOSTAT\data_chunks")
-        for xdf_file in in_dir.glob("*.xdf"):
-            sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:4]}"
-            print(f"Exporting {xdf_file} -> {sub}")
-            export_xdf_hmd_synced(xdf_file, sub)
-        print("Done.")
-
-
 if __name__ == "__main__":
-    main()
+    in_dir = Path(r"P:\BIOSTAT\lsl_chunks")
+    out_dir = Path(r"P:\BIOSTAT\data_chunks")
+    for xdf_file in in_dir.glob("*.xdf"):
+        sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:4]}"
+        print(f"Exporting {xdf_file} -> {sub}")
+        export_xdf_hmd_synced(xdf_file, sub)
+    print("Done.")

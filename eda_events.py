@@ -6,8 +6,8 @@ from scipy import stats
 import matplotlib.pyplot as plt
 
 # Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path(r"P:\BIOSTAT\resampled")
-OUT_DIR = Path(r"P:\BIOSTAT\stress_section\gsr_raw_markers")
+ROOT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
+OUT_DIR = Path(r"P:\BIOSTAT\stress_section\resamp_filtered")
 
 # Filenames inside each subject folder (change if yours differ)
 MANIFEST_FILENAME = "manifest.json"
@@ -39,6 +39,9 @@ for subject_dir in ROOT_DIR.iterdir():
     for col in ["onset", "sample", "offset", "duration"]:
         events_df[col] = pd.to_numeric(events_df[col], errors="coerce")
     gsr_csv_path = subject_dir / GSR_FILENAME
+    if not gsr_csv_path.exists():
+        print("[WARN] Missing GSR file:", gsr_csv_path)
+        continue
     gsr_df = pd.read_csv(gsr_csv_path)
     # Check if the events exist in the file
     if not ((events_df["value"] == FIRST_EVENT).any() and
@@ -77,7 +80,7 @@ for subject_dir in ROOT_DIR.iterdir():
     with open(manifest_path, "r") as f:
         manifest = json.load(f)
     # According to group save in desired list
-    sub_id = manifest.get("id")
+    sub_id = manifest.get("id")[:-5]
     # -------- Plot GSR + event markers --------
     fig, ax = plt.subplots(figsize=(12, 4), dpi=200)  # higher dpi
 
