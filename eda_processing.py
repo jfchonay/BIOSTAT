@@ -6,11 +6,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from resampling import resample_timeseries, resample_events
 from eda_digital_filtering import eda_digital_filter
+from scipy.stats import zscore
 
 if __name__ == '__main__':
     # Root folder that contains one subfolder per subject and Output folder
-    ROOT_DIR = Path(r"P:\BIOSTAT\test_filter\recovery")
-    OUT_DIR = Path(r"P:\BIOSTAT\test_filter\filtered\recovery_2Hz")
+    ROOT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
+    OUT_DIR = Path(r"P:\BIOSTAT\stress_section\resamp_filtered")
 
     # Filenames inside each subject folder (change if yours differ)
     MANIFEST_FILENAME = "manifest.json"
@@ -18,7 +19,7 @@ if __name__ == '__main__':
     GSR_FILENAME = "GSR.csv"
 
     # Events names
-    FIRST_EVENT = "Station scene  starting recovery phase"
+    FIRST_EVENT = "Tutorial  starting baseline"
     LAST_EVENT = "Station scene  end recovery phase  showing waypoint to debrief recovery"
 
     t_fs = 15
@@ -50,9 +51,7 @@ if __name__ == '__main__':
         events_path = subject_dir / EVENTS_FILENAME
         # Resample markers-events
         if events_path.exists():
-            print(f"Resampling events: {events_path.name}")
             events_df = pd.read_csv(events_path)
-
             events_df_resampled = resample_events(
                 events_df,
                 orig_fs=EVENT_FS,
@@ -67,8 +66,7 @@ if __name__ == '__main__':
         gsr = (-gsr_df["CH1"].to_numpy())
         # TRYING TO PROCESS THE DATA
         # Process the raw EDA signal
-        gsr_bio = eda_digital_filter(gsr, sampling_rate=t_fs, cut_off=2)
-        gsr_neuro = eda_digital_filter(gsr, sampling_rate=t_fs, cut_off=3)
+        gsr_filt = eda_digital_filter(gsr, sampling_rate=t_fs, cut_off=2)
         # Cut data
         # Using the name of the events get the sample in which every event is found
         start_idx = events_df_resampled["sample"][events_df_resampled.index[events_df["value"] == FIRST_EVENT]]
@@ -84,11 +82,9 @@ if __name__ == '__main__':
         start_sample = max(0, first_idx - s_b)
         end_sample = min(last_idx + s_a, len(gsr_df) - 1)  # inclusive index
         # Extract GSR segment
-        gsr_event_bio = gsr_bio[start_sample:end_sample]
-        gsr_event_neuro = gsr_neuro[start_sample:end_sample]
-        gsr_event_raw = gsr[start_sample:end_sample]
+        gsr_event = gsr_filt[start_sample:end_sample]
         # time vector
-        n_samples = len(gsr_event_bio)
+        n_samples = len(gsr_event)
         time_sec = np.arange(n_samples) / t_fs  # seconds
         if time_sec.size == 0:
             print(f"[WARN] No valid time points for {subject_dir}, skipping.")
@@ -112,22 +108,22 @@ if __name__ == '__main__':
         # According to group save in desired list
         sub_id = manifest.get("id")[:-5]
         # define the spacing between them
-        ys = [gsr_event_raw, gsr_event_bio, gsr_event_neuro]
-        # dynamic range across all signals
-        global_range = max(y.max() - y.min() for y in ys)
-        # spacing between stacked curves
-        spacing = 0.9 * global_range  # 20% gap
+        # ys = [gsr_event_raw, gsr_event_bio, gsr_event_neuro]
+        # # dynamic range across all signals
+        # global_range = max(y.max() - y.min() for y in ys)
+        # # spacing between stacked curves
+        # spacing = 0.9 * global_range  # 20% gap
         # -------- Plot GSR + event markers --------
         fig, ax = plt.subplots(figsize=(12, 4), dpi=200)  # higher dpi
         # Plot normalized GSR
         # clean signal: thin, saturated
         ax.plot(
             time_sec,
-            gsr_event_bio + (3*spacing),
+            zscore(gsr_event),
             linewidth=1,
             color='red',  # saturated
             alpha=0.5,
-            label='2Hz (digital)'
+            label='2Hz'
         )
         #
         # ax.plot(
@@ -139,32 +135,32 @@ if __name__ == '__main__':
         #     label='3Hz (digital)'
         # )
         # raw signal: thicker, transparent
-        ax.plot(
-            time_sec,
-            gsr_event_raw + (2*spacing),
-            linewidth=1,
-            color='blue',
-            alpha=0.5,  # light & transparent
-            label='raw'
-        )
+        # ax.plot(
+        #     time_sec,
+        #     gsr_event_raw + (2*spacing),
+        #     linewidth=1,
+        #     color='blue',
+        #     alpha=0.5,  # light & transparent
+        #     label='raw'
+        # )
         # Grid + shared color for grid and event lines
         grid_color = "0.7"  # light gray
         ax.grid(True, which="both", linestyle="--", alpha=0.9, color=grid_color)
         # X ticks every 10 seconds
-        ax.set_xticks(np.arange(0, time_sec[-1] + 15, 15))
+        ax.set_xticks(np.arange(0, time_sec[-1] + 10, 10))
         # Event lines
-        for _, row in events_between.iterrows():
-            t_ev = row["time_sec"]
-            # vertical dashed line in same color as grid
-            ax.axvline(t_ev, linestyle="--", linewidth=0.5, color=grid_color)
-        ax.tick_params(axis="x", labelsize=6)
+        # for _, row in events_between.iterrows():
+        #     t_ev = row["time_sec"]
+        #     # vertical dashed line in same color as grid
+        #     ax.axvline(t_ev, linestyle="--", linewidth=0.5, color=grid_color)
+        ax.tick_params(axis="x", labelsize=5)
         # Labels, title, grid
-        ax.set_title(f"Subject {sub_id} at {t_fs}Hz")
+        ax.set_title(f"Subject {sub_id} at {t_fs}Hz low pass filtered at {2}Hz")
         ax.set_xlabel("Time (s)")
-        ax.set_ylabel('')
-        ax.tick_params(axis='y', which='both', left=False, labelleft=False)
+        ax.set_ylabel('GSR (Z score)')
+        # ax.tick_params(axis='y', which='both', left=False, labelleft=False)
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
-        ax.legend(loc="upper right", fontsize=10)
+        # ax.legend(loc="upper right", fontsize=10)
         plt.tight_layout()
         # optionally save instead of showing, or both
         # out_path = subject_dir / f"{sub_id}_gsr_pre.png"

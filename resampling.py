@@ -3,35 +3,49 @@ from pathlib import Path
 from scipy.signal import resample
 import numpy as np
 import pandas as pd
+from datetime import datetime
+from pandas.errors import EmptyDataError, ParserError
+
 
 
 def resample_timeseries(df: pd.DataFrame, orig_fs: float, target_fs: float) -> pd.DataFrame:
     """
-    Resample all numeric columns in df from orig_fs to target_fs
-    using an FFT-based method (brick-wall low-pass at new Nyquist)
+    Resample all numeric + boolean columns in df from orig_fs to target_fs
+    using an FFT-based method (brick-wall low-pass at new Nyquist).
     Assumes rows are uniformly sampled at orig_fs.
     """
     if df.empty:
         return df.copy()
     # Number of samples in the input
     n_orig = df.shape[0]
-    # Compute how many samples we want in the resampled signal.
-    # This keeps the duration approximately the same.
-    duration = (n_orig - 1) / orig_fs       # in seconds
+    # Keep the duration approximately the same
+    duration = (n_orig - 1) / orig_fs  # seconds
     n_new = int(round(duration * target_fs)) + 1
-    # Select numeric columns
-    num_df = df.select_dtypes(include=[np.number])
-    if num_df.empty:
-        # nothing to resample
+    # Split numeric and boolean columns
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    bool_cols = df.select_dtypes(include=["bool", "boolean"]).columns  # covers numpy + pandas nullable bool
+    # If nothing to resample, just return a copy
+    if len(num_cols) == 0 and len(bool_cols) == 0:
         return df.copy()
-    # Convert to 2D array (time x channels)
-    data = num_df.to_numpy()
-    # FFT-based resampling along the time axis (axis=0)
-    # This implicitly applies a brick-wall low-pass at target_fs / 2
+    # Columns to resample (preserve original order)
+    cols_to_resample = [c for c in df.columns if c in num_cols or c in bool_cols]
+    sub = df[cols_to_resample].copy()
+    # Cast boolean columns to float so they can be resampled
+    if len(bool_cols) > 0:
+        sub[bool_cols] = sub[bool_cols].astype(float)
+    # Time × channels array
+    data = sub.to_numpy()
+    # FFT-based resampling along time axis (axis=0)
     data_rs = resample(data, num=n_new, axis=0)
-    # Build new DataFrame for numeric data
-    resampled_num = pd.DataFrame(data_rs, columns=num_df.columns)
-    return resampled_num
+    # Back to DataFrame
+    resampled = pd.DataFrame(data_rs, columns=cols_to_resample)
+    # Convert boolean columns back to bool via thresholding
+    # (values should be in [0, 1]-ish; tune threshold if needed)
+    for col in bool_cols:
+        # >= 0.5 means "mostly True" after resampling
+        resampled[col] = resampled[col] >= 0.5
+
+    return resampled
 
 
 def resample_events(
@@ -64,21 +78,17 @@ def resample_events(
 
 if __name__ == "__main__":
     # Root folder that contains one subfolder per subject and Output folder
-    ROOT_DIR = Path(r"P:\BIOSTAT\data_chunks")
-    OUT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
+    ROOT_DIR = Path(r"P:\BIOSTAT\raw_data")
+    OUT_DIR = Path(r"P:\BIOSTAT\resampled")
     # Desired sampling rate for all files
     TARGET_FS = 100.0  # Hz
     # Filenames inside each subject folder
     MANIFEST_FILENAME = "manifest.json"
-    EVENTS_FILENAME = "Markers-events.csv"
     BODY_FILENAME = "rigidBody.json"
-    GSR_JSON_FILENAME = "GSR.json"
-    GSR_CSV_FILENAME = "GSR.csv"
 
     for subject_dir in ROOT_DIR.iterdir():
         if not subject_dir.is_dir():
             continue
-
         manifest_path = subject_dir / MANIFEST_FILENAME
         if not manifest_path.exists():
             print(f"[WARN] No manifest.json in {subject_dir}, skipping.")
@@ -92,28 +102,11 @@ if __name__ == "__main__":
         # Copy manifest, add new sampling rate
         manifest_copy = manifest.copy()
         manifest_copy["resampled_fs"] = TARGET_FS
-
+        manifest_copy["export_time_utc"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        # save the manifest with the updated data
         with open(output_dir / MANIFEST_FILENAME, "w") as o:
             json.dump(manifest_copy, o, indent=2)
-
-        print(f" Wrote manifest with resampled_fs")
-
-        # Resample GSR
-        gsr_json_path = subject_dir / GSR_JSON_FILENAME
-        gsr_csv_path = subject_dir / GSR_CSV_FILENAME
-
-        if gsr_json_path.exists() and gsr_csv_path.exists():
-            print(f" Resampling GSR: {gsr_csv_path.name}")
-            with open(gsr_json_path, "r") as f:
-                meta = json.load(f)
-            gsr_fs = meta["stats_original"]["estimated_srate"]
-            gsr_df = pd.read_csv(gsr_csv_path)
-            gsr_resampled = resample_timeseries(gsr_df, orig_fs=gsr_fs, target_fs=TARGET_FS)
-            out_gsr = output_dir / f"GSR.csv"
-            gsr_resampled.to_csv(out_gsr, index=False)
-            print(f" Saved: {out_gsr.name}")
-        else:
-            print(f"  [WARN] Missing GSR files in {subject_dir} (need both JSON+CSV).")
+        # get the sampling rate for the events
         body_path = subject_dir / BODY_FILENAME
         if not body_path.exists():
             print(f"[WARN] No rigidBody.json in {subject_dir}, skipping.")
@@ -121,20 +114,47 @@ if __name__ == "__main__":
         # Read json where sr for events is stores
         with open(body_path, "r") as b:
             body = json.load(b)
-        EVENT_FS = body["stats_original"]["estimated_srate"]
-        # Resample markers-events
-        events_path = subject_dir / EVENTS_FILENAME
-        if events_path.exists():
-            print(f"Resampling events: {events_path.name}")
-            events_df = pd.read_csv(events_path)
-
-            events_df_resampled = resample_events(
-                events_df,
-                orig_fs=EVENT_FS,
-                target_fs=TARGET_FS
-            )
-            out_events = output_dir / "Markers-events.csv"
-            events_df_resampled.to_csv(out_events, index=False)
-            print(f"Saved: {out_events.name}")
-        else:
-            print(f"  [WARN] No {EVENTS_FILENAME} in {subject_dir}, skipping events.")
+        EVENT_FS = body["stats_original"]["effective_srate"]
+        # read every stream to re sample them
+        for stream in manifest["streams"]:
+            if stream["role"] == "events":
+                try:
+                    events_df = pd.read_csv(stream["csv"])
+                except (EmptyDataError, ParserError) as e:
+                    print(f"[WARN] Bad/empty events CSV: {stream['csv']} ({e})")
+                    continue
+                if events_df.empty:
+                    print(f"[WARN] Events CSV has 0 rows: {stream['csv']}")
+                    continue
+                with open(stream["json"], "r") as m:
+                    meta = json.load(m)
+                events_df_resampled = resample_events(
+                    events_df,
+                    orig_fs=EVENT_FS,
+                    target_fs=TARGET_FS
+                )
+                meta_copy = meta.copy()
+                meta_copy["resampled_fs"] = TARGET_FS
+                with open(output_dir / f"{stream['type']}-events.json", "w") as m_c:
+                    json.dump(meta_copy, m_c, indent=2)
+                out_events = output_dir / f"{stream['type']}-events.csv"
+                events_df_resampled.to_csv(out_events, index=False)
+            elif stream["role"] == "signal":
+                try:
+                    data = pd.read_csv(stream["csv"])
+                except (EmptyDataError, ParserError) as e:
+                    print(f"[WARN] Bad/empty signal CSV: {stream['csv']} ({e})")
+                    continue
+                if data.empty:
+                    print(f"[WARN] Signal CSV has 0 rows: {stream['csv']}")
+                    continue
+                with open(stream["json"], "r") as m:
+                    meta_data = json.load(m)
+                DATA_FS = meta_data["stats_original"]["effective_srate"]
+                data_resampled = resample_timeseries(data, orig_fs=DATA_FS, target_fs=TARGET_FS)
+                meta_copy = meta_data.copy()
+                meta_copy["resampled_fs"] = TARGET_FS
+                with open(output_dir / f"{stream['type']}.json", "w") as m_c:
+                    json.dump(meta_copy, m_c, indent=2)
+                out_data = output_dir / f"{stream['type']}.csv"
+                data_resampled.to_csv(out_data, index=False)

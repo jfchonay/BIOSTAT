@@ -207,22 +207,19 @@ def channel_meta_from_stream(stream) -> Tuple[List[str], List[Optional[str]]]:
 def stream_stats(stream):
     ts = np.asarray(stream.get("time_stamps", []), dtype=float)
     info = stream.get("info", {})
-    try:
-        nominal = float(info.get("nominal_srate", 0.0)[0])
-    except Exception:
-        nominal = 0.0
-    eff = None
+    nominal = float(info.get("nominal_srate", 0.0)[0])
+    effective = float(info.get("effective_srate", 0.0))
+
     if ts.size > 1:
         diffs = np.diff(ts)
         diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
-        eff = float(1.0 / np.median(diffs)) if diffs.size else None
     return {
         "n_samples": int(ts.size),
         "first_time_stamp": (float(ts[0]) if ts.size else None),
         "last_time_stamp": (float(ts[-1]) if ts.size else None),
         "duration_sec": (float(ts[-1] - ts[0]) if ts.size >= 2 else 0.0),
-        "nominal_srate": (nominal if nominal else None),
-        "estimated_srate": (eff if eff else None),
+        "nominal_srate": nominal,
+        "effective_srate": effective,
     }
 
 
@@ -278,7 +275,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
     manifest = {
         "source_file": str(xdf_path),
         "id": xdf_path.stem,
-        "greenery": xdf_path.stem[6],
+        "greenery": xdf_path.stem[5],
         "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "file_header": fileheader,
         "reference": {
@@ -306,7 +303,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
         # onset diff vs HMD and RFC3339 acq time
         if s_first is not None:
-            diff_sec = float(s_first - ref_first)
+            diff_sec = float(s_first - ref_first)/10000
             onset_diff_seconds[name] = diff_sec
             acquisition_times[name] = to_rfc3339(BASE_ACQ_DATETIME + timedelta(seconds=diff_sec))
         else:
@@ -423,10 +420,10 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 # -------------------------- CLI --------------------------
 
 if __name__ == "__main__":
-    in_dir = Path(r"P:\BIOSTAT\lsl_chunks")
-    out_dir = Path(r"P:\BIOSTAT\data_chunks")
+    in_dir = Path(r"P:\BIOSTAT\lsl_full")
+    out_dir = Path(r"P:\BIOSTAT\raw_data")
     for xdf_file in in_dir.glob("*.xdf"):
-        sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:4]}"
+        sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:3]}"
         print(f"Exporting {xdf_file} -> {sub}")
         export_xdf_hmd_synced(xdf_file, sub)
     print("Done.")

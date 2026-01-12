@@ -6,24 +6,22 @@ from scipy import stats
 import matplotlib.pyplot as plt
 
 # Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path(r"P:\BIOSTAT\resampled_chunks")
-OUT_DIR = Path(r"P:\BIOSTAT\stress_section\resamp_filtered")
+ROOT_DIR = Path(r"P:\BIOSTAT\test_time_synch")
+OUT_DIR = Path(r"P:\BIOSTAT\test_time_synch\gsr_body")
 
 # Filenames inside each subject folder (change if yours differ)
 MANIFEST_FILENAME = "manifest.json"
 EVENTS_FILENAME = "Markers-events.csv"
 GSR_FILENAME = "GSR.csv"
+HMD_FILENAME = "rigidBody.csv"
 
 # Events names
-FIRST_EVENT = "Tutorial  starting baseline"
-LAST_EVENT = "Station scene  end recovery phase  showing waypoint to debrief recovery"
+FIRST_EVENT = "Elevator  Showing elevator"
+LAST_EVENT = "Playing voice over  StopTimeOverGoToYellowStar"
 
 # Parameters of the epoch
 s_b = 1 * 100
 s_a = 1 * 100
-
-greenery_true = []
-greenery_false = []
 
 for subject_dir in ROOT_DIR.iterdir():
     if not subject_dir.is_dir():
@@ -43,6 +41,12 @@ for subject_dir in ROOT_DIR.iterdir():
         print("[WARN] Missing GSR file:", gsr_csv_path)
         continue
     gsr_df = pd.read_csv(gsr_csv_path)
+    # Open rigidBody
+    hmd_path = subject_dir / HMD_FILENAME
+    if not hmd_path.exists():
+        print("[WARN] Missing HMD file:", hmd_path)
+        continue
+    hmd_df = pd.read_csv(hmd_path)
     # Check if the events exist in the file
     if not ((events_df["value"] == FIRST_EVENT).any() and
             (events_df["value"] == LAST_EVENT).any()):
@@ -57,6 +61,11 @@ for subject_dir in ROOT_DIR.iterdir():
     gsr_event = gsr_df["CH1"].iloc[start_sample:end_sample + 1].to_numpy()
     # Invert and z-score normalize
     gsr = stats.zscore(-gsr_event)
+    # Extract coordinates segment
+    hmd_event_x = hmd_df["rigid_x (meter)"].iloc[start_sample:end_sample + 1].to_numpy()
+    hmd_event_z = hmd_df["rigid_z (meter)"].iloc[start_sample:end_sample + 1].to_numpy()
+    hmd_event = np.sqrt(hmd_event_x**2 + hmd_event_z**2)
+    hmd = stats.zscore(hmd_event)
     # time vector
     n_samples = len(gsr)
     time_sec = np.arange(n_samples) / 100  # seconds
@@ -83,23 +92,23 @@ for subject_dir in ROOT_DIR.iterdir():
     sub_id = manifest.get("id")[:-5]
     # -------- Plot GSR + event markers --------
     fig, ax = plt.subplots(figsize=(12, 4), dpi=200)  # higher dpi
-
     # Plot normalized GSR
-    ax.plot(time_sec, gsr, linewidth=0.25)
+    ax.plot(time_sec, gsr + 4, linewidth=0.35, label="GSR")
+    ax.plot(time_sec, hmd, linewidth=0.35, label="distance")
 
     # Grid + shared color for grid and event lines
     grid_color = "0.7"  # light gray
     ax.grid(True, which="both", linestyle="--", alpha=0.9, color=grid_color)
 
     # X ticks every 10 seconds
-    ax.set_xticks(np.arange(0, time_sec[-1] + 30, 30))
+    ax.set_xticks(np.arange(0, time_sec[-1] + 1, 1))
 
     # Y ticks every 0.5 (based on current limits)
     ymin, ymax = ax.get_ylim()
     ytick_start = np.floor(ymin * 2) / 2.0
     ytick_end = np.ceil(ymax * 2) / 2.0
     ax.set_yticks(np.arange(ytick_start, ytick_end + 0.5, 0.5))
-    ax.tick_params(axis="x", labelsize=6)
+    ax.tick_params(axis="x", labelsize=3)
 
     # Event lines + labels on the time axis
     for _, row in events_between.iterrows():
@@ -112,7 +121,7 @@ for subject_dir in ROOT_DIR.iterdir():
         ax.text(
             t_ev,
             -0.1,  # slightly below axis
-            row["label"],  # "1", "2", ...
+            row["value"][0:10],  # "1", "2", ...
             transform=ax.get_xaxis_transform(),
             ha="center",
             va="top",
@@ -121,9 +130,10 @@ for subject_dir in ROOT_DIR.iterdir():
             clip_on=False,
         )
     # Labels, title, grid
-    ax.set_title(f"Subject {sub_id}")
+    ax.set_title(f"Subject {sub_id} at 100Hz")
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("GSR (z-scored)")
+    ax.set_ylabel("Z score")
+    ax.legend(loc="upper right", fontsize=10)
     ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
     plt.tight_layout()
