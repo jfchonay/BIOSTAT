@@ -73,7 +73,6 @@ def resample_events(
     sample_new = np.rint(sample_orig * ratio).astype(int)
     out["onset"] = onset_s
     out["sample"] = sample_new
-
     return out
 
 if __name__ == "__main__":
@@ -82,10 +81,10 @@ if __name__ == "__main__":
     OUT_DIR = Path(r"P:\BIOSTAT\resampled")
     # Desired sampling rate for all files
     TARGET_FS = 100.0  # Hz
-    # Filenames inside each subject folder
+    # Filenames inside each subject folder, we want the reference we used to time synch and the main metadata
     MANIFEST_FILENAME = "manifest.json"
     BODY_FILENAME = "rigidBody.json"
-
+    # iterate over every directory
     for subject_dir in ROOT_DIR.iterdir():
         if not subject_dir.is_dir():
             continue
@@ -93,7 +92,7 @@ if __name__ == "__main__":
         if not manifest_path.exists():
             print(f"[WARN] No manifest.json in {subject_dir}, skipping.")
             continue
-        # Read manifest and greenery flag
+        # Read manifest
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
         # Create output folder
@@ -133,6 +132,7 @@ if __name__ == "__main__":
                     orig_fs=EVENT_FS,
                     target_fs=TARGET_FS
                 )
+                # update and save the JSON file
                 meta_copy = meta.copy()
                 meta_copy["resampled_fs"] = TARGET_FS
                 with open(output_dir / f"{stream['type']}-events.json", "w") as m_c:
