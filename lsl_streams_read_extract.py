@@ -30,12 +30,10 @@ def trim_to_hmd_window(stream_ts: np.ndarray,
                        clip_end: bool = True):
     """
     Trim a stream's native samples to the HMD window without resampling.
-
     stream_ts : (N,) native timestamps of the stream (float seconds)
     stream_data : (N,C) numeric data aligned to stream_ts
     hmd_ts : (M,) HMD timestamps (reference clock)
     clip_end : if True, drop samples after HMD end; if False, keep them
-
     Returns:
         t_rel : (K,) time in seconds since HMD start (0 at HMD first sample)
         y     : (K,C) trimmed data (no NaN padding)
@@ -60,9 +58,7 @@ def trim_to_hmd_window(stream_ts: np.ndarray,
 
 def _ceil_indices(ref_ts: np.ndarray, evt_ts: np.ndarray) -> np.ndarray:
     """
-    MATLAB's find(ref_ts >= t, 1, 'first') for each t:
-      -> np.searchsorted(ref_ts, t, side='left')
-    If t > ref_ts[-1], we clip to the last sample (MATLAB would return empty).
+    Make sure that we can match the last time stamp of events with the reference stream
     """
     idx = np.searchsorted(ref_ts, evt_ts, side="left")
     idx = np.clip(idx, 0, max(0, ref_ts.size - 1))
@@ -133,24 +129,20 @@ def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
             idx = np.zeros_like(evt_ts, dtype=int)
         else:
             idx = _ceil_indices(hmd_time_stamps, evt_ts)
-
         #'value'
         vals = _flatten_marker_values(s.get("time_series", []))
         # length safety
         if len(vals) != evt_ts.size:
-            # trim/pad to match (rare; keeps behavior defined)
+            # trim/pad to match
             n = min(len(vals), evt_ts.size)
             vals = vals[:n]
             evt_ts = evt_ts[:n]
             idx = idx[:n]
-
-        # sanitize
+        # sanitize values, as they contain characters that are not letters or numbers
         vals_clean = [_ALNUM_RE.sub(" ", str(v)) for v in vals]
-
         # event type from stream.info.type if present; default 'Marker'
         stype = s.get("info", {}).get("type", [""])[0] if isinstance(s.get("info", {}).get("type", []), list) \
                 else s.get("info", {}).get("type", "") or "Marker"
-
         # build event dicts
         for t, i, v in zip(evt_ts, idx, vals_clean):
             out_events.append({
@@ -161,7 +153,6 @@ def stream_to_events_hmd(in_streams, hmd_time_stamps: np.ndarray):
                 "duration": 0,
                 "value": v
             })
-
     # sort by original timestamp
     out_events.sort(key=lambda e: e["timestamp"])
     return out_events
@@ -205,6 +196,9 @@ def channel_meta_from_stream(stream) -> Tuple[List[str], List[Optional[str]]]:
 
 
 def stream_stats(stream):
+    """
+    Reads the metadata saved in the dictionaries and extracts it as a dictionary to be saved in a JSON file
+    """
     ts = np.asarray(stream.get("time_stamps", []), dtype=float)
     info = stream.get("info", {})
     nominal = float(info.get("nominal_srate", 0.0)[0])
@@ -244,16 +238,21 @@ def to_rfc3339(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{int(dt.microsecond/1000):03d}"
 
 
-# -------------------------- core exporting --------------------------
 
 BASE_ACQ_DATETIME = datetime(2025, 5, 20, 12, 0, 0)  # HMD = time zero by convention
 
 
 def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
+    """
+    Main function that takes the path of the xdf file, parse the streams and synchs them with the reference stream to
+    output a folder with a CSV and JSON file for every stream, and a JSON containing all metadata.
+    xdf_path: Path object
+    out_dir: Path object
+    """
+    # use pyxdf to read the streams
     out_dir.mkdir(parents=True, exist_ok=True)
     streams, fileheader = pyxdf.load_xdf(str(xdf_path))
-
-    # ---- find HMD reference stream ----
+    # find HMD reference stream index, we know that the fixed name for this stream is "hmd"
     hmd_idx = None
     for i, s in enumerate(streams):
         if stream_name(s).strip().lower() == "hmd":
@@ -261,22 +260,21 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             break
     if hmd_idx is None:
         raise RuntimeError(f"No HMD stream found in {xdf_path.name} (by exact name 'HMD').")
-
+    # extract the name and time stamps from our reference stream
     ref_stream = streams[hmd_idx]
     ref_name = stream_name(ref_stream)
     ref_ts = np.asarray(ref_stream.get("time_stamps", []), dtype=float)
     if ref_ts.size == 0:
         raise RuntimeError(f"HMD stream has no time stamps in {xdf_path.name}.")
-
+    # extract the first time point, we will use as a reference
     ref_first = float(ref_ts[0])
-    hmd_time = ref_ts - ref_first  # time since HMD start (s); this is the global time vector
-
-    # manifest skeleton
+    hmd_time = ref_ts - ref_first
+    # manifest skeleton to store all metadata
     manifest = {
         "source_file": str(xdf_path),
         "id": xdf_path.stem,
-        "greenery": xdf_path.stem[5],
-        "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "greenery": xdf_path.stem[5], # this is 0 for false and 1 for true
+        "export_time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), # to be uptadated automatically
         "file_header": fileheader,
         "reference": {
             "stream_name": ref_name,
@@ -286,38 +284,32 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         },
         "streams": []
     }
-
-    # For per-stream timing descriptions relative to HMD
+    # stream timing descriptions relative to HMD
     onset_diff_seconds = {}
     acquisition_times = {}
-
-    # ---- iterate and export each stream ----
+    # iterate and export each stream
     for k, stream in enumerate(streams):
         name = stream_name(stream)
         stype = stream_type(stream)
         base = f"{sanitize(stype, f'stream{k}')}"
-
-        # original stream time stamps & first
+        # original stream time stamps and first
         ts = np.asarray(stream.get("time_stamps", []), dtype=float)
         s_first = float(ts[0]) if ts.size else None
-
         # onset diff vs HMD and RFC3339 acq time
         if s_first is not None:
-            diff_sec = float(s_first - ref_first)/10000
+            diff_sec = float(s_first - ref_first)/10000 # divide to match the stamps in seconds
             onset_diff_seconds[name] = diff_sec
             acquisition_times[name] = to_rfc3339(BASE_ACQ_DATETIME + timedelta(seconds=diff_sec))
         else:
             onset_diff_seconds[name] = None
             acquisition_times[name] = None
-
-        # ---- EVENT STREAMS (Markers / LookedAtObjects): build onsets vs HMD ----
+        #  for the EVENT STREAMS (Markers / LookedAtObjects) create time stamps that match the HMD
         if is_event_stream(stream):
             event_struct = stream_to_events_hmd(stream, ref_ts)  # ref_ts is HMD timestamps
             # onset_hmd_s = hmd_time[sample]
             samples = np.array([e["sample"] for e in event_struct], dtype=int)
             # guard against empty
             onset_hmd_s = (hmd_time[samples] if samples.size else np.array([], dtype=float))
-
             df = pd.DataFrame({
                 "onset": onset_hmd_s,  # seconds since HMD start
                 "sample": samples,  # HMD sample index
@@ -327,7 +319,6 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                 "duration": [e["duration"] for e in event_struct],
             })
             df.to_csv(out_dir / f"{base}-events.csv", index=False)
-
             # sidecar
             sidecar_events = {
                 "name": name,
@@ -341,10 +332,9 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                 },
                 "columns": ["onset", "sample", "value", "offset", "duration"]
             }
-            # Optionally also save the MATLAB-like struct as JSON:
+            # save the JSON
             with open(out_dir / f"{base}-events.json", "w", encoding="utf-8") as f:
                 json.dump(sidecar_events, f, ensure_ascii=False, indent=2)
-
             manifest["streams"].append({
                 "index": k,
                 "name": name,
@@ -356,30 +346,26 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                 "columns": list(df.columns),
             })
             continue  # done with events
-
+        # extract all streams that are not events
         data = np.asarray(stream.get("time_series", []))
         if data.ndim == 1:
             data = data.reshape(-1, 1)
         elif data.shape[0] < data.shape[1]:
             data = data.T  # (n_samples, n_channels)
-
+        # original time stamps
         ts = np.asarray(stream.get("time_stamps", []), dtype=float)
-
         # Trim to HMD window; remove leading "empty" region automatically
         t_rel, y, keep = trim_to_hmd_window(ts, data, ref_ts, clip_end=True)
-
         # Build DataFrame with ONLY valid rows, time starts at 0 (HMD start)
         names, units = channel_meta_from_stream(stream)
         if len(names) != y.shape[1]:
             names = [f"ch{i + 1}" for i in range(y.shape[1])]
             units = [None] * y.shape[1]
         headers = [f"{n} ({u})" if u else n for n, u in zip(names, units)]
-
         df = pd.DataFrame(y, columns=headers)
         df.to_csv(out_dir / f"{base}.csv", index=False)
         json_path = out_dir / f"{base}.json"
-
-        # sidecar
+        # sidecar for every data stream
         sidecar = {
             "name": name,
             "type": stype,
@@ -393,9 +379,9 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             },
             "columns": headers
         }
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(sidecar, f, ensure_ascii=False, indent=2)
-
+        with open(json_path, "w", encoding="utf-8") as f_s:
+            json.dump(sidecar, f_s, ensure_ascii=False, indent=2)
+        # update the main metadata JSON
         manifest["streams"].append({
             "index": k,
             "name": name,
@@ -406,23 +392,21 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             "n_rows": int(len(df)),
             "columns": list(df.columns),
         })
-
     # enrich manifest with timing maps
     manifest.update({
         "onset_diff_seconds_vs_HMD": onset_diff_seconds,   # {stream_name: seconds}
         "acquisition_time_rfc3339": acquisition_times      # {stream_name: 'YYYY-mm-ddTHH:MM:SS.FFF'}
     })
+    with open(out_dir / "manifest.json", "w", encoding="utf-8") as m_f:
+        json.dump(manifest, m_f, ensure_ascii=False, indent=2)
 
-    with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-
-
-# -------------------------- CLI --------------------------
 
 if __name__ == "__main__":
+    # set main folder paths, they should contain all xdf files to use
     in_dir = Path(r"P:\BIOSTAT\lsl_full")
     out_dir = Path(r"P:\BIOSTAT\raw_data")
     for xdf_file in in_dir.glob("*.xdf"):
+        # use only the subject number to save the folder
         sub = out_dir / f"sub-{sanitize(xdf_file.stem)[0:3]}"
         print(f"Exporting {xdf_file} -> {sub}")
         export_xdf_hmd_synced(xdf_file, sub)
