@@ -6,7 +6,7 @@ from scipy import stats
 import matplotlib.pyplot as plt
 
 # Root folder that contains one subfolder per subject and Output folder
-ROOT_DIR = Path(r"P:\BIOSTAT\test_time_synch")
+ROOT_DIR = Path(r"P:\BIOSTAT\resampled")
 OUT_DIR = Path(r"P:\BIOSTAT\test_time_synch\gsr_body")
 
 # Filenames inside each subject folder (change if yours differ)
