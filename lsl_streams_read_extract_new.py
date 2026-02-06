@@ -55,7 +55,7 @@ def trim_to_hmd_window(stream_ts: np.ndarray,
     if stream_data.ndim == 1:
         stream_data = stream_data.reshape(-1, 1)
 
-    t_rel = (stream_ts[keep] - start) / 10000
+    t_rel = stream_ts[keep] - start
     y     = stream_data[keep, :]
     return t_rel, y, keep
 
@@ -208,19 +208,22 @@ def channel_meta_from_stream(stream) -> Tuple[List[str], List[Optional[str]]]:
 def stream_stats(stream):
     ts = np.asarray(stream.get("time_stamps", []), dtype=float)
     info = stream.get("info", {})
-    nominal = float(info.get("nominal_srate", 0.0)[0])
+    try:
+        nominal = float(info.get("nominal_srate", 0.0)[0])
+    except Exception:
+        nominal = 0.0
     effective = float(info.get("effective_srate", 0.0))
     if ts.size > 1:
         diffs = np.diff(ts)
         diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
-
+        eff = float(1.0 / np.median(diffs)) if diffs.size else None
     return {
         "n_samples": int(ts.size),
         "first_time_stamp": (float(ts[0]) if ts.size else None),
         "last_time_stamp": (float(ts[-1]) if ts.size else None),
         "duration_sec": (float(ts[-1] - ts[0]) if ts.size >= 2 else 0.0),
-        "nominal_srate": nominal,
-        "effective_srate": effective,
+        "nominal_srate": (nominal if nominal else None),
+        "estimated_srate": (effective if effective else None),
     }
 
 
@@ -268,7 +271,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         duration
 
     A manifest.json plus per-stream JSON sidecars are also written.
-    """
+    """    
     out_dir.mkdir(parents=True, exist_ok=True)
     streams, fileheader = pyxdf.load_xdf(str(xdf_path))
 
@@ -288,8 +291,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         raise RuntimeError(f"HMD stream has no time stamps in {xdf_path.name}.")
 
     ref_first = float(ref_ts[0])
-    # Global reference time: seconds since HMD start (t=0 at first HMD sample)
-    hmd_time = (ref_ts - ref_first) / 10000
+    hmd_time = ref_ts - ref_first  # time since HMD start (s); this is the global time vector
 
     # manifest skeleton
     manifest = {
@@ -323,30 +325,30 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
         # onset diff vs HMD and RFC3339 acq time
         if s_first is not None:
-            diff_sec = float(s_first - ref_first)/10000
+            diff_sec = float(s_first - ref_first)
             onset_diff_seconds[name] = diff_sec
             acquisition_times[name] = to_rfc3339(BASE_ACQ_DATETIME + timedelta(seconds=diff_sec))
         else:
             onset_diff_seconds[name] = None
             acquisition_times[name] = None
 
-        # ---- EVENT STREAMS (Markers / LookedAtObjects) ----
+        # ---- EVENT STREAMS (Markers / LookedAtObjects): build onsets vs HMD ----
         if is_event_stream(stream):
             event_struct = stream_to_events_hmd(stream, ref_ts)  # ref_ts is HMD timestamps
-
+            # onset_hmd_s = hmd_time[sample]
             samples = np.array([e["sample"] for e in event_struct], dtype=int)
+            # guard against empty
             onset_hmd_s = (hmd_time[samples] if samples.size else np.array([], dtype=float))
 
             df = pd.DataFrame({
                 "onset": onset_hmd_s,  # seconds since HMD start
-                "sample": samples,     # HMD sample index
+                "sample": samples,  # HMD sample index
                 "type": [e["type"] for e in event_struct],
                 "value": [e["value"] for e in event_struct],
                 "offset": [e["offset"] for e in event_struct],
                 "duration": [e["duration"] for e in event_struct],
             })
-            csv_path = out_dir / f"{base}-events.csv"
-            df.to_csv(csv_path, index=False)
+            df.to_csv(out_dir / f"{base}-events.csv", index=False)
 
             # sidecar
             sidecar_events = {
@@ -357,12 +359,11 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                 "reference": {
                     "aligned_to": ref_name,
                     "timeline": "HMD",
-                    "note": "onset and sample are aligned to HMD start at t=0s.",
+                    "note": "onset and sample are aligned to HMD start at t=0s",
                 },
                 "columns": list(df.columns),
             }
-            json_path = out_dir / f"{base}-events.json"
-            with open(json_path, "w", encoding="utf-8") as f:
+            with open(out_dir / f"{base}-events.json", "w", encoding="utf-8") as f:
                 json.dump(sidecar_events, f, ensure_ascii=False, indent=2)
 
             manifest["streams"].append({
@@ -370,8 +371,8 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
                 "name": name,
                 "type": stype,
                 "role": "events",
-                "csv": str(csv_path),
-                "json": str(json_path),
+                "csv": str(out_dir / f"{base}-events.csv"),
+                "json": str(out_dir / f"{base}-events.json"),
                 "n_rows": int(len(df)),
                 "columns": list(df.columns),
             })
@@ -387,51 +388,11 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
 
         ts = np.asarray(stream.get("time_stamps", []), dtype=float)
 
-        # Trim to HMD window; remove leading/trailing region automatically
+        # Trim to HMD window; remove leading "empty" region automatically
         t_rel, y, keep = trim_to_hmd_window(ts, data, ref_ts, clip_end=True)
 
-        # If stream has no data inside HMD window, still export empty CSV with header
+        # Build DataFrame with ONLY valid rows, time starts at 0 (HMD start)
         names, units = channel_meta_from_stream(stream)
-        if y.size == 0:
-            # create empty frame with time + channels
-            if len(names) == 0:
-                names = ["ch1"]
-                units = [None]
-            headers = [f"{n} ({u})" if u else n for n, u in zip(names, units)]
-            df = pd.DataFrame(columns=["time"] + headers)
-            csv_path = out_dir / f"{base}.csv"
-            df.to_csv(csv_path, index=False)
-
-            sidecar = {
-                "name": name,
-                "type": stype,
-                "kind": "signal_hmd_synced",
-                "channels": [{"name": n, "unit": u} for n, u in zip(names, units)],
-                "stats_original": stream_stats(stream),
-                "reference": {
-                    "aligned_to": ref_name,
-                    "timeline": "HMD",
-                    "coverage_note": "No samples within the HMD time window.",
-                },
-                "columns": list(df.columns),
-            }
-            json_path = out_dir / f"{base}.json"
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(sidecar, f, ensure_ascii=False, indent=2)
-
-            manifest["streams"].append({
-                "index": k,
-                "name": name,
-                "type": stype,
-                "role": "signal",
-                "csv": str(csv_path),
-                "json": str(json_path),
-                "n_rows": 0,
-                "columns": list(df.columns),
-            })
-            continue
-
-        # Have valid samples inside HMD window
         if len(names) != y.shape[1]:
             names = [f"ch{i + 1}" for i in range(y.shape[1])]
             units = [None] * y.shape[1]
@@ -470,7 +431,7 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
             "name": name,
             "type": stype,
             "role": "signal",
-            "csv": str(csv_path),
+            "csv": str(out_dir / f"{base}.csv"),
             "json": str(json_path),
             "n_rows": int(len(df)),
             "columns": list(df.columns),
@@ -486,13 +447,12 @@ def export_xdf_hmd_synced(xdf_path: Path, out_dir: Path):
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
 
-
 # -------------------------- CLI --------------------------
 
 def main():
     if __name__ == "__main__":
         in_dir = Path(r"F:\BIOSTAT\0_source_data")
-        out_dir = Path(r"F:\BIOSTAT\1_raw_data_Magda")
+        out_dir = Path(r"F:\BIOSTAT\1_raw_data_python")
         for xdf_file in in_dir.glob("*.xdf"):
             # sanitize, remove trailing underscores, then take 3 chars
             clean = sanitize(xdf_file.stem).rstrip("_")[:3]
