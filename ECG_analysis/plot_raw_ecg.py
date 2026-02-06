@@ -37,7 +37,6 @@ def process_ecg(df, sub_dir, out_dir, ecg_metadata_df):
             print(f"Missing column {col} in ECG data for {sub_dir}, skipping.")
             return
 
-
     # Get time and ECG signal
     time = df['time']
     ecg_signal = df['ch1 (microvolts)']
@@ -65,7 +64,7 @@ def process_ecg(df, sub_dir, out_dir, ecg_metadata_df):
 
 def main():
     if __name__ == "__main__":
-        in_dir = Path(r"F:\BIOSTAT\1_raw_data_Magda")
+        in_dir = Path(r"F:\BIOSTAT\1_raw_data_Jose")
         out_dir = Path(r"F:\BIOSTAT\Plots\raw_ECG")
         # Create a main dataframe to store metadata about missing or incomplete ECG files
         ecg_metadata_df = pd.DataFrame(columns=["subject", "biased", "status", "n_samples", "duration_sec", "nominal_srate", "estimated_srate"])
@@ -81,8 +80,12 @@ def main():
             for ecg_file in ecg_files:
                 print(f"Processing {ecg_file}")
                 ecg_metadata_df.loc[len(ecg_metadata_df)] = [sub_dir.name, "no", "empty", 0, 0, 0, 0]
-                df = pd.read_csv(ecg_file)
-                process_ecg(df, sub_dir, out_dir, ecg_metadata_df)
+                try:
+                    df = pd.read_csv(ecg_file)
+                    process_ecg(df, sub_dir, out_dir, ecg_metadata_df)
+                except ValueError:
+                    print("File empty, skipping.")
+
 
         # Get file with list of biased subjects and update metadata dataframe accordingly
         biased_file = Path(r"F:\BIOSTAT\biased_subjects.txt")
